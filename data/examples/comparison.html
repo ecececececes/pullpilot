@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>PullPilot — Engine Comparison</title><style>
+:root{--ink:#1a1a2e;--mut:#6b7280;--ok:#0a7d33;--miss:#b00020;--warn:#b06a00;--line:#e5e7eb}
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);max-width:900px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.5rem} h2{margin-top:2rem;font-size:1.1rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:.6rem}
+th,td{text-align:center;padding:.5rem;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left;color:var(--mut)}
+thead th{color:var(--ink);font-weight:700}
+.ok{color:var(--ok);font-weight:600} .miss{color:var(--miss)} .warn{color:var(--warn);font-weight:600}
+.note{color:var(--mut);font-size:.85rem}
+</style></head><body>
+<h1>PullPilot — Engine Comparison</h1>
+<h2>Metrics</h2>
+<table><thead><tr><th>metric</th><th>static</th><th>llm:mock</th></tr></thead><tbody><tr><th>detection recall</th><td>50%</td><td>90%</td></tr><tr><th>precision</th><td>100%</td><td>90%</td></tr><tr><th>exact localization</th><td>92%</td><td>11%</td></tr><tr><th>false alarms / clean PR</th><td>0.00</td><td>1.00</td></tr></tbody></table>
+<h2>Detection by bug category</h2>
+<table><thead><tr><th>category</th><th>static</th><th>llm:mock</th></tr></thead><tbody><tr><th>and_or_mixup</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>bare_except</th><td class="ok">1/1</td><td class="miss">0/1</td></tr><tr><th>bare_except_2</th><td class="ok">1/1</td><td class="miss">0/1</td></tr><tr><th>eq_none</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>inverted_condition</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>is_literal</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>missing_return</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>mutable_default</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>mutable_default_dict</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>neq_none</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>none_subscript</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>off_by_one</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>off_by_one_slice</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>resource_leak</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>sign_error</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>swapped_args</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>undefined_name</th><td class="ok">1/1</td><td class="ok">1/1</td></tr><tr><th>wrong_boundary</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>wrong_index</th><td class="miss">0/1</td><td class="ok">1/1</td></tr><tr><th>wrong_operator</th><td class="miss">0/1</td><td class="ok">1/1</td></tr></tbody></table>
+<p class="note">Each engine reviewed the same PRs. Static analysis is expected to
+catch pattern bugs and miss semantic ones; an LLM engine should close that gap.</p>
+</body></html>

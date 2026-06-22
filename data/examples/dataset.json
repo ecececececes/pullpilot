@@ -1,0 +1,351 @@
+[
+  {
+    "id": "b01",
+    "file": "indexing.py",
+    "diff": "--- a/indexing.py\n+++ b/indexing.py\n@@ -1,2 +1,2 @@\n def get_last(items):\n-    return items[len(items) - 1]\n+    return items[len(items)]\n",
+    "post_source": "def get_last(items):\n    return items[len(items)]\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "off_by_one",
+    "title": "Adjust last-element index",
+    "description": ""
+  },
+  {
+    "id": "b02",
+    "file": "bucket.py",
+    "diff": "--- a/bucket.py\n+++ b/bucket.py\n@@ -1,5 +1,3 @@\n-def add_item(item, bucket=None):\n-    if bucket is None:\n-        bucket = []\n+def add_item(item, bucket=[]):\n     bucket.append(item)\n     return bucket\n",
+    "post_source": "def add_item(item, bucket=[]):\n    bucket.append(item)\n    return bucket\n",
+    "ground_truth_lines": [
+      1
+    ],
+    "label": "buggy",
+    "category": "mutable_default",
+    "title": "Simplify bucket arg",
+    "description": ""
+  },
+  {
+    "id": "b03",
+    "file": "checks.py",
+    "diff": "--- a/checks.py\n+++ b/checks.py\n@@ -1,2 +1,2 @@\n def is_empty(x):\n-    return x is None\n+    return x == None\n",
+    "post_source": "def is_empty(x):\n    return x == None\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "eq_none",
+    "title": "Tidy None check",
+    "description": ""
+  },
+  {
+    "id": "b04",
+    "file": "parsing.py",
+    "diff": "--- a/parsing.py\n+++ b/parsing.py\n@@ -1,5 +1,5 @@\n def safe_int(s):\n     try:\n         return int(s)\n-    except ValueError:\n+    except:\n         return 0\n",
+    "post_source": "def safe_int(s):\n    try:\n        return int(s)\n    except:\n        return 0\n",
+    "ground_truth_lines": [
+      4
+    ],
+    "label": "buggy",
+    "category": "bare_except",
+    "title": "Broaden error handling",
+    "description": ""
+  },
+  {
+    "id": "b05",
+    "file": "money.py",
+    "diff": "--- a/money.py\n+++ b/money.py\n@@ -1,2 +1,2 @@\n def net(price, discount):\n-    return price - discount\n+    return price + discount\n",
+    "post_source": "def net(price, discount):\n    return price + discount\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "wrong_operator",
+    "title": "Compute net price",
+    "description": ""
+  },
+  {
+    "id": "b06",
+    "file": "age.py",
+    "diff": "--- a/age.py\n+++ b/age.py\n@@ -1,2 +1,2 @@\n def is_adult(age):\n-    return age >= 18\n+    return age <= 18\n",
+    "post_source": "def is_adult(age):\n    return age <= 18\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "inverted_condition",
+    "title": "Refine adult check",
+    "description": ""
+  },
+  {
+    "id": "b07",
+    "file": "catalog.py",
+    "diff": "--- a/catalog.py\n+++ b/catalog.py\n@@ -1,5 +1,3 @@\n def price_of(catalog, item):\n     entry = catalog.get(item)\n-    if entry is None:\n-        return 0\n     return entry[\"price\"]\n",
+    "post_source": "def price_of(catalog, item):\n    entry = catalog.get(item)\n    return entry[\"price\"]\n",
+    "ground_truth_lines": [
+      3
+    ],
+    "label": "buggy",
+    "category": "none_subscript",
+    "title": "Simplify price lookup",
+    "description": ""
+  },
+  {
+    "id": "b08",
+    "file": "equality.py",
+    "diff": "--- a/equality.py\n+++ b/equality.py\n@@ -1,2 +1,2 @@\n def is_one(n):\n-    return n == 1\n+    return n is 1\n",
+    "post_source": "def is_one(n):\n    return n is 1\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "is_literal",
+    "title": "Compare to one",
+    "description": ""
+  },
+  {
+    "id": "b09",
+    "file": "arith.py",
+    "diff": "--- a/arith.py\n+++ b/arith.py\n@@ -1,2 +1,2 @@\n def divide(a, b):\n-    return a / b\n+    return b / a\n",
+    "post_source": "def divide(a, b):\n    return b / a\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "swapped_args",
+    "title": "Reorder division",
+    "description": ""
+  },
+  {
+    "id": "b10",
+    "file": "io_utils.py",
+    "diff": "--- a/io_utils.py\n+++ b/io_utils.py\n@@ -1,3 +1,3 @@\n def read_file(path):\n-    with open(path) as f:\n-        return f.read()\n+    f = open(path)\n+    return f.read()\n",
+    "post_source": "def read_file(path):\n    f = open(path)\n    return f.read()\n",
+    "ground_truth_lines": [
+      2,
+      3
+    ],
+    "label": "buggy",
+    "category": "resource_leak",
+    "title": "Read file contents",
+    "description": ""
+  },
+  {
+    "id": "b11",
+    "file": "voting.py",
+    "diff": "--- a/voting.py\n+++ b/voting.py\n@@ -1,2 +1,2 @@\n def can_vote(age):\n-    return age > 17\n+    return age > 18\n",
+    "post_source": "def can_vote(age):\n    return age > 18\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "wrong_boundary",
+    "title": "Voting eligibility",
+    "description": ""
+  },
+  {
+    "id": "b12",
+    "file": "numbers.py",
+    "diff": "--- a/numbers.py\n+++ b/numbers.py\n@@ -1,2 +1,2 @@\n def double(x):\n-    return x * 2\n+    x * 2\n",
+    "post_source": "def double(x):\n    x * 2\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "missing_return",
+    "title": "Double a number",
+    "description": ""
+  },
+  {
+    "id": "b13",
+    "file": "greeting.py",
+    "diff": "--- a/greeting.py\n+++ b/greeting.py\n@@ -1,3 +1,3 @@\n def greet(name):\n     msg = \"Hi \" + name\n-    return msg\n+    return message\n",
+    "post_source": "def greet(name):\n    msg = \"Hi \" + name\n    return message\n",
+    "ground_truth_lines": [
+      3
+    ],
+    "label": "buggy",
+    "category": "undefined_name",
+    "title": "Build greeting",
+    "description": ""
+  },
+  {
+    "id": "b14",
+    "file": "validate.py",
+    "diff": "--- a/validate.py\n+++ b/validate.py\n@@ -1,2 +1,2 @@\n def valid(x):\n-    return x > 0 and x < 100\n+    return x > 0 or x < 100\n",
+    "post_source": "def valid(x):\n    return x > 0 or x < 100\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "and_or_mixup",
+    "title": "Range validation",
+    "description": ""
+  },
+  {
+    "id": "b15",
+    "file": "slicing.py",
+    "diff": "--- a/slicing.py\n+++ b/slicing.py\n@@ -1,2 +1,2 @@\n def first_n(items, n):\n-    return items[:n]\n+    return items[:n + 1]\n",
+    "post_source": "def first_n(items, n):\n    return items[:n + 1]\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "off_by_one_slice",
+    "title": "Take first n",
+    "description": ""
+  },
+  {
+    "id": "b16",
+    "file": "presence.py",
+    "diff": "--- a/presence.py\n+++ b/presence.py\n@@ -1,2 +1,2 @@\n def has_value(d, k):\n-    return d.get(k) is not None\n+    return d.get(k) != None\n",
+    "post_source": "def has_value(d, k):\n    return d.get(k) != None\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "neq_none",
+    "title": "Presence check",
+    "description": ""
+  },
+  {
+    "id": "b17",
+    "file": "access.py",
+    "diff": "--- a/access.py\n+++ b/access.py\n@@ -1,2 +1,2 @@\n def second(items):\n-    return items[1]\n+    return items[2]\n",
+    "post_source": "def second(items):\n    return items[2]\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "wrong_index",
+    "title": "Get second item",
+    "description": ""
+  },
+  {
+    "id": "b18",
+    "file": "store.py",
+    "diff": "--- a/store.py\n+++ b/store.py\n@@ -1,5 +1,3 @@\n-def record(key, store=None):\n-    if store is None:\n-        store = {}\n+def record(key, store={}):\n     store[key] = True\n     return store\n",
+    "post_source": "def record(key, store={}):\n    store[key] = True\n    return store\n",
+    "ground_truth_lines": [
+      1
+    ],
+    "label": "buggy",
+    "category": "mutable_default_dict",
+    "title": "Simplify store arg",
+    "description": ""
+  },
+  {
+    "id": "b19",
+    "file": "distance.py",
+    "diff": "--- a/distance.py\n+++ b/distance.py\n@@ -1,2 +1,2 @@\n def abs_diff(a, b):\n-    return abs(a - b)\n+    return a - b\n",
+    "post_source": "def abs_diff(a, b):\n    return a - b\n",
+    "ground_truth_lines": [
+      2
+    ],
+    "label": "buggy",
+    "category": "sign_error",
+    "title": "Compute difference",
+    "description": ""
+  },
+  {
+    "id": "b20",
+    "file": "loader.py",
+    "diff": "--- a/loader.py\n+++ b/loader.py\n@@ -1,5 +1,5 @@\n def load(parse, text):\n     try:\n         return parse(text)\n-    except (ValueError, KeyError):\n+    except:\n         return None\n",
+    "post_source": "def load(parse, text):\n    try:\n        return parse(text)\n    except:\n        return None\n",
+    "ground_truth_lines": [
+      4
+    ],
+    "label": "buggy",
+    "category": "bare_except_2",
+    "title": "Catch parse errors",
+    "description": ""
+  },
+  {
+    "id": "c01",
+    "file": "greet2.py",
+    "diff": "--- a/greet2.py\n+++ b/greet2.py\n@@ -1,2 +1,3 @@\n def greet(name):\n+    \"\"\"Return a greeting.\"\"\"\n     return \"Hi \" + name\n",
+    "post_source": "def greet(name):\n    \"\"\"Return a greeting.\"\"\"\n    return \"Hi \" + name\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Add docstring",
+    "description": ""
+  },
+  {
+    "id": "c02",
+    "file": "totals.py",
+    "diff": "--- a/totals.py\n+++ b/totals.py\n@@ -1,5 +1,5 @@\n def total(xs):\n-    s = 0\n+    acc = 0\n     for x in xs:\n-        s += x\n-    return s\n+        acc += x\n+    return acc\n",
+    "post_source": "def total(xs):\n    acc = 0\n    for x in xs:\n        acc += x\n    return acc\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Rename accumulator",
+    "description": ""
+  },
+  {
+    "id": "c03",
+    "file": "adder.py",
+    "diff": "--- a/adder.py\n+++ b/adder.py\n@@ -1,2 +1,2 @@\n-def add(a, b):\n+def add(a: int, b: int) -> int:\n     return a + b\n",
+    "post_source": "def add(a: int, b: int) -> int:\n    return a + b\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Add type hints",
+    "description": ""
+  },
+  {
+    "id": "c04",
+    "file": "labels.py",
+    "diff": "--- a/labels.py\n+++ b/labels.py\n@@ -1,2 +1,2 @@\n def label(n):\n-    return \"item \" + str(n)\n+    return f\"item {n}\"\n",
+    "post_source": "def label(n):\n    return f\"item {n}\"\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Use f-string",
+    "description": ""
+  },
+  {
+    "id": "c05",
+    "file": "geometry.py",
+    "diff": "--- a/geometry.py\n+++ b/geometry.py\n@@ -1,2 +1,3 @@\n def circle_area(r):\n-    return 3.14159 * r * r\n+    pi = 3.14159\n+    return pi * r * r\n",
+    "post_source": "def circle_area(r):\n    pi = 3.14159\n    return pi * r * r\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Extract pi constant",
+    "description": ""
+  },
+  {
+    "id": "c06",
+    "file": "sign.py",
+    "diff": "--- a/sign.py\n+++ b/sign.py\n@@ -1,2 +1,3 @@\n def is_pos(x):\n+    \"\"\"True if x is positive.\"\"\"\n     return x > 0\n",
+    "post_source": "def is_pos(x):\n    \"\"\"True if x is positive.\"\"\"\n    return x > 0\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Document predicate",
+    "description": ""
+  },
+  {
+    "id": "c07",
+    "file": "combine.py",
+    "diff": "--- a/combine.py\n+++ b/combine.py\n@@ -1,2 +1,3 @@\n def combine(a, b, c):\n-    return a + b + c\n+    result = a + b + c\n+    return result\n",
+    "post_source": "def combine(a, b, c):\n    result = a + b + c\n    return result\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Name intermediate result",
+    "description": ""
+  },
+  {
+    "id": "c08",
+    "file": "square.py",
+    "diff": "--- a/square.py\n+++ b/square.py\n@@ -1,2 +1,3 @@\n def square(x):\n+    # square the input\n     return x * x\n",
+    "post_source": "def square(x):\n    # square the input\n    return x * x\n",
+    "ground_truth_lines": [],
+    "label": "clean",
+    "category": "",
+    "title": "Add comment",
+    "description": ""
+  }
+]
