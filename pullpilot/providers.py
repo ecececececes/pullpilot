@@ -4,7 +4,7 @@ MockProvider needs no API key and lets the whole pipeline run offline (wiring
 test). Real providers are lazy-imported so missing SDKs never break imports.
 """
 from __future__ import annotations
-
+import requests
 import json
 import os
 import re
@@ -110,7 +110,48 @@ class OpenAIProvider(Provider):
             ],
         )
         return resp.choices[0].message.content or ""
+    
+class SelfHostedProvider(Provider):
+    """Provider for a self-hosted Ollama instance exposed over HTTP."""
 
+    name = "selfhosted"
+
+    def __init__(
+        self,
+        model: str = "llama3.2:3b",
+        base_url: Optional[str] = None,
+        timeout: float = 60.0,
+    ):
+        self._model = model
+        self._timeout = timeout
+
+        self._base_url = (
+            base_url
+            or os.environ.get(
+                "SELFHOSTED_BASE_URL",
+                "https://sabbath-crazily-gigantic.ngrok-free.dev/api/generate",
+            )
+        )
+
+    def complete(self, system: str, user: str) -> str:
+        prompt = f"{system}\n\n{user}"
+
+        payload = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+        }
+
+        response = requests.post(
+            self._base_url,
+            json=payload,
+            timeout=self._timeout,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+        return data.get("response", "")
 
 # Free / OpenAI-compatible presets. base_url and model can be overridden with
 # the matching *_BASE_URL / *_MODEL env vars if a default goes stale.
@@ -135,6 +176,7 @@ _REGISTRY = {
     "mock": MockProvider,
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
+    "selfhosted": SelfHostedProvider,
 }
 
 

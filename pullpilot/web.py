@@ -25,7 +25,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _DATASET = os.path.join(_ROOT, "data", "examples", "dataset.json")
 _RESULTS = os.path.join(_ROOT, "data", "examples", "results.json")
 
-_ENGINE_CHOICES = ["static"] + sorted(PRESETS) + ["openai", "anthropic"]
+_ENGINE_CHOICES = ["static"] + sorted(PRESETS) + ["selfhosted","openai", "anthropic"]
 
 
 def _load_examples():
