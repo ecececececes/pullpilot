@@ -264,9 +264,14 @@ def dashboard():
     return render_template_string(DASH.replace("__BODY__", body))
 
 
+import os
+
 def main():
-    print("PullPilot UI → http://localhost:5000  (Ctrl+C to stop)")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", 5000))
+
+    print(f"PullPilot UI → http://{host}:{port}")
+    app.run(host=host, port=port, debug=False)
 
 
 if __name__ == "__main__":
