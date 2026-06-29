@@ -1,0 +1,27 @@
+name: PullPilot Review
+description: Automated code review with LLM + context grounding
+inputs:
+  provider:
+    description: LLM provider (anthropic, groq, openai, etc)
+    required: false
+    default: anthropic
+  verify:
+    description: Run linter + tests
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: pip install -r requirements.txt
+      shell: bash
+    - run: python -m pullpilot.github_review --provider ${{ inputs.provider }} --post ${{ inputs.verify && '--verify' || '' }}
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
