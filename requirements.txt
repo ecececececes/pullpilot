@@ -1,6 +1,7 @@
 unidiff>=0.7
 pydantic>=2.0
 pyflakes>=3.0
+requests==2.31.0
 # real (non-mock) LLM runs:
 anthropic>=0.40
 openai>=1.40
