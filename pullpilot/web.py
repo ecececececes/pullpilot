@@ -326,6 +326,7 @@ def index():
 def api_review():
     data = request.get_json(force=True) or {}
     engine_name = data.get("engine", "static")
+    skip_context = False
     
     # Determine if this is a GitHub PR or a direct diff
     if "github_url" in data:
@@ -336,6 +337,7 @@ def api_review():
             file = pr_data["files"][0] if pr_data["files"] else "pr_file.py"
             title = pr_data["title"]
             description = pr_data["description"]
+            skip_context = True  # GitHub diffs bypass parsing
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
     else:
@@ -352,7 +354,7 @@ def api_review():
                   else LLMEngine(get_provider(engine_name)))
         pr = PullRequest(diff=diff, post_files={file: data.get("source", "")},
                          title=title, description=description)
-        review = Reviewer(engine, use_context=True,
+        review = Reviewer(engine, use_context=(not skip_context),
                           verify=bool(data.get("verify"))).review(pr)
         issues = [{
             "file": i.file, "line_start": i.line_start, "line_end": i.line_end,
@@ -366,7 +368,6 @@ def api_review():
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 400
 
 
-@app.route("/dashboard")
 def dashboard():
     try:
         with open(_RESULTS) as f:

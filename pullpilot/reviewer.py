@@ -39,7 +39,11 @@ class Reviewer:
         )
 
     def review(self, pr: PullRequest) -> Review:
-        parsed = parse_diff(pr.diff)
+        try:
+            parsed = parse_diff(pr.diff)
+        except Exception:
+            # If parsing fails, use empty parsed (LLM reads raw diff)
+            parsed = parse_diff("")
         changed_by_file = {fc.path: set(fc.affected_lines) for fc in parsed.files}
 
         blocks = []

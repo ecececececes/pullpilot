@@ -25,6 +25,13 @@ class ParsedDiff:
     files: List[FileChange] = field(default_factory=list)
 
 
+def _normalize_diff(diff_text: str) -> str:
+    """Strip GitHub function context from hunk headers."""
+    import re
+    # Remove everything after @@ on hunk header lines
+    return re.sub(r'(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@).*', r'\1', diff_text)
+
+
 def _strip_prefix(path: str) -> str:
     for pre in ("a/", "b/"):
         if path.startswith(pre):
@@ -33,6 +40,7 @@ def _strip_prefix(path: str) -> str:
 
 
 def parse_diff(diff_text: str) -> ParsedDiff:
+    diff_text = _normalize_diff(diff_text)
     patch = PatchSet(diff_text)
     files: List[FileChange] = []
     for pf in patch:
