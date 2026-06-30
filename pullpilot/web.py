@@ -1,18 +1,21 @@
 """PullPilot web UI. Runs locally and uses the real review engines.
 
-    pip install flask
+    pip install flask requests
     python -m pullpilot.web
     # open http://localhost:5000
 
-Two pages:
+Three pages:
   /            paste a diff (+ optional full file) -> live review
+               OR paste a GitHub PR link -> fetch & review
   /dashboard   benchmark numbers from data/examples/results.json
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 
+import requests
 from flask import Flask, jsonify, render_template_string, request
 
 from .engines import LLMEngine, StaticAnalysisEngine
@@ -42,6 +45,77 @@ def _load_examples():
     return out
 
 
+def _fetch_github_pr(url: str) -> dict:
+    """
+    Fetch a GitHub PR by URL and extract the diff.
+    
+    Accepts URLs like:
+    - https://github.com/owner/repo/pull/123
+    - https://api.github.com/repos/owner/repo/pulls/123
+    
+    Returns: {"diff": "...", "title": "...", "description": "...", "file": "..."}
+    """
+    # Parse GitHub PR URL
+    match = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+    if not match:
+        raise ValueError(
+            "Invalid GitHub PR URL. Expected: https://github.com/owner/repo/pull/123"
+        )
+    
+    owner, repo, pr_num = match.groups()
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_num}"
+    
+    # Use GitHub token if available (for higher rate limits)
+    headers = {}
+    if token := os.getenv("GITHUB_TOKEN"):
+        headers["Authorization"] = f"token {token}"
+    
+    try:
+        # Fetch PR details
+        resp = requests.get(api_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        pr_data = resp.json()
+        
+        # Fetch the actual diff (unified diff format)
+        diff_resp = requests.get(
+            f"{api_url}/files",
+            headers={**headers, "Accept": "application/vnd.github.v3.raw"},
+            timeout=10
+        )
+        diff_resp.raise_for_status()
+        
+        # Parse files from the PR to get one of the changed files
+        files_resp = requests.get(
+            f"{api_url}/files",
+            headers=headers,
+            timeout=10,
+            params={"per_page": 100}
+        )
+        files_resp.raise_for_status()
+        files_data = files_resp.json()
+        
+        # Get the patch (GitHub includes a unified diff in the patch field)
+        diff_text = ""
+        changed_files = []
+        for f in files_data:
+            if f.get("patch"):
+                diff_text += f["patch"] + "\n"
+            changed_files.append(f["filename"])
+        
+        if not diff_text:
+            raise ValueError("No diff found in this PR (may be empty or binary files only)")
+        
+        return {
+            "diff": diff_text,
+            "title": pr_data.get("title", f"PR #{pr_num}"),
+            "description": pr_data.get("body", ""),
+            "files": changed_files,
+            "url": url,
+        }
+    except requests.exceptions.RequestException as e:
+        raise ValueError(f"Failed to fetch PR from GitHub: {e}")
+
+
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PullPilot</title><style>
@@ -62,9 +136,14 @@ main{max-width:1100px;margin:1.4rem auto;padding:0 1.4rem;display:grid;grid-temp
 @media(max-width:820px){main{grid-template-columns:1fr}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem}
 .panel h2{margin:.1rem 0 .9rem;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line);margin-bottom:.9rem}
+.tab{padding:.5rem .9rem;cursor:pointer;border:0;background:0;font-size:.85rem;color:var(--mut);border-bottom:2px solid transparent;font-weight:600}
+.tab:hover{color:var(--ink)} .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{display:none} .tab-content.active{display:block}
 label{display:block;font-size:.8rem;color:var(--mut);margin:.6rem 0 .3rem}
-textarea,select{width:100%;font-family:var(--mono);font-size:.82rem;border:1px solid var(--line);border-radius:8px;padding:.6rem;background:#fcfcfd;color:var(--ink)}
-textarea{resize:vertical} #diff{height:150px} #source{height:170px}
+textarea,select,input{width:100%;font-family:var(--mono);font-size:.82rem;border:1px solid var(--line);border-radius:8px;padding:.6rem;background:#fcfcfd;color:var(--ink)}
+textarea{resize:vertical;font-family:var(--mono)} input[type="text"]{font-family:var(--sans)}
+#diff{height:150px} #source{height:170px}
 select{font-family:var(--sans)}
 .row{display:flex;gap:.8rem;align-items:end;flex-wrap:wrap;margin-top:.7rem}
 .row>div{flex:1;min-width:130px}
@@ -96,12 +175,36 @@ button:hover{filter:brightness(1.05)} button:disabled{opacity:.5;cursor:default}
 <main>
   <section class="panel">
     <h2>Change to review</h2>
-    <label for="example">Load an example</label>
-    <select id="example"><option value="">— pick a sample pull request —</option></select>
-    <label for="diff">Diff</label>
-    <textarea id="diff" placeholder="Paste a unified diff here..."></textarea>
-    <label for="source">Full file after the change (helps context + the static engine)</label>
-    <textarea id="source" placeholder="Paste the full post-change file (optional)..."></textarea>
+    
+    <div class="tabs">
+      <button class="tab active" data-tab="paste">Paste diff</button>
+      <button class="tab" data-tab="github">GitHub PR link</button>
+      <button class="tab" data-tab="examples">Load example</button>
+    </div>
+    
+    <!-- PASTE DIFF TAB -->
+    <div id="paste" class="tab-content active">
+      <label for="diff">Diff</label>
+      <textarea id="diff" placeholder="Paste a unified diff here..."></textarea>
+      <label for="source">Full file after the change (helps context + the static engine)</label>
+      <textarea id="source" placeholder="Paste the full post-change file (optional)..."></textarea>
+    </div>
+    
+    <!-- GITHUB PR TAB -->
+    <div id="github" class="tab-content">
+      <label for="github_url">GitHub PR URL</label>
+      <input type="text" id="github_url" placeholder="https://github.com/owner/repo/pull/123">
+      <p class="hint">Paste a link to any public GitHub PR. We'll fetch the diff and review it.</p>
+    </div>
+    
+    <!-- EXAMPLES TAB -->
+    <div id="examples" class="tab-content">
+      <label for="example">Load an example</label>
+      <select id="example"><option value="">— pick a sample pull request —</option></select>
+      <p class="hint">Load one of the built-in examples to test the review engine.</p>
+    </div>
+    
+    <!-- ENGINE & BUTTONS -->
     <div class="row">
       <div>
         <label for="engine">Engine</label>
@@ -112,26 +215,60 @@ button:hover{filter:brightness(1.05)} button:disabled{opacity:.5;cursor:default}
     </div>
     <p class="hint">Static needs no key. Free engines (gemini, groq, github, openrouter) read their key from the matching environment variable in the terminal you launched this from.</p>
   </section>
+  
   <section class="panel">
     <h2>Review</h2>
-    <div id="out"><div class="empty">Pick a sample or paste a diff, then press Review.</div></div>
+    <div id="out"><div class="empty">Pick a sample, paste a diff, or add a GitHub PR link, then press Review.</div></div>
   </section>
 </main>
+
 <script>
+// Tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+  };
+});
+
 const EXAMPLES = __EXAMPLES__;
 const sel = document.getElementById('example');
 EXAMPLES.forEach(e=>{const o=document.createElement('option');o.value=e.id;
   o.textContent=(e.label==='buggy'?'🐞 ':'✅ ')+e.title+' ('+e.file+')';sel.appendChild(o);});
 sel.onchange=()=>{const e=EXAMPLES.find(x=>x.id===sel.value);if(!e)return;
   document.getElementById('diff').value=e.diff;document.getElementById('source').value=e.source;};
+
 const out=document.getElementById('out'), go=document.getElementById('go');
 go.onclick=async()=>{
-  const body={diff:document.getElementById('diff').value,
-    source:document.getElementById('source').value,
-    file:(EXAMPLES.find(x=>x.id===sel.value)||{}).file||'input.py',
-    engine:document.getElementById('engine').value,
-    verify:document.getElementById('verify').checked};
-  if(!body.diff.trim()){out.innerHTML='<div class="err">Add a diff first.</div>';return;}
+  const activeTab = document.querySelector('.tab.active').dataset.tab;
+  let body = {
+    engine: document.getElementById('engine').value,
+    verify: document.getElementById('verify').checked
+  };
+  
+  if (activeTab === 'github') {
+    // GitHub PR mode
+    const url = document.getElementById('github_url').value.trim();
+    if(!url){out.innerHTML='<div class="err">Add a GitHub PR URL first.</div>';return;}
+    body.github_url = url;
+  } else if (activeTab === 'examples') {
+    // Example mode
+    const e = EXAMPLES.find(x=>x.id===sel.value);
+    if(!e){out.innerHTML='<div class="err">Select an example first.</div>';return;}
+    body.diff = e.diff;
+    body.source = e.source;
+    body.file = e.file;
+  } else {
+    // Paste diff mode
+    const diff = document.getElementById('diff').value;
+    if(!diff.trim()){out.innerHTML='<div class="err">Add a diff first.</div>';return;}
+    body.diff = diff;
+    body.source = document.getElementById('source').value;
+    body.file = 'input.py';
+  }
+  
   go.disabled=true;out.innerHTML='<div class="empty">Reviewing… (LLM engines can take a moment)</div>';
   try{
     const r=await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -188,16 +325,33 @@ def index():
 @app.route("/api/review", methods=["POST"])
 def api_review():
     data = request.get_json(force=True) or {}
-    diff = data.get("diff", "")
-    if not diff.strip():
-        return jsonify({"error": "No diff provided."}), 400
     engine_name = data.get("engine", "static")
-    file = data.get("file") or "input.py"
+    
+    # Determine if this is a GitHub PR or a direct diff
+    if "github_url" in data:
+        # Fetch the PR from GitHub
+        try:
+            pr_data = _fetch_github_pr(data["github_url"])
+            diff = pr_data["diff"]
+            file = pr_data["files"][0] if pr_data["files"] else "pr_file.py"
+            title = pr_data["title"]
+            description = pr_data["description"]
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    else:
+        # Direct diff from textarea
+        diff = data.get("diff", "")
+        if not diff.strip():
+            return jsonify({"error": "No diff provided."}), 400
+        file = data.get("file") or "input.py"
+        title = data.get("title", "")
+        description = ""
+    
     try:
         engine = (StaticAnalysisEngine() if engine_name == "static"
                   else LLMEngine(get_provider(engine_name)))
         pr = PullRequest(diff=diff, post_files={file: data.get("source", "")},
-                         title=data.get("title", ""))
+                         title=title, description=description)
         review = Reviewer(engine, use_context=True,
                           verify=bool(data.get("verify"))).review(pr)
         issues = [{
@@ -264,15 +418,11 @@ def dashboard():
     return render_template_string(DASH.replace("__BODY__", body))
 
 
-import os
-
 def main():
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", 5000))
-
-    print(f"PullPilot UI → http://{host}:{port}")
+    print(f"PullPilot UI → http://0.0.0.0:{port}  (Ctrl+C to stop)")
     app.run(host=host, port=port, debug=False)
-
 
 if __name__ == "__main__":
     main()
