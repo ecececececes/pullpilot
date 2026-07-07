@@ -11,6 +11,7 @@ Three pages:
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import re
 import requests
 from flask import Flask, jsonify, render_template_string, request
 
+from .diff_parser import parse_diff
 from .engines import LLMEngine, StaticAnalysisEngine
 from .providers import PRESETS, get_provider
 from .reviewer import PullRequest, Reviewer
@@ -45,15 +47,35 @@ def _load_examples():
     return out
 
 
+def _fetch_file_at_ref(owner: str, repo: str, path: str, ref: str, headers: dict) -> str | None:
+    """Fetch a single file's full text content at a given ref. Returns None on
+    any failure (binary file, missing file, rate limit, ...) so callers can
+    degrade gracefully instead of failing the whole review."""
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+            headers=headers, params={"ref": ref}, timeout=10,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if body.get("encoding") == "base64" and "content" in body:
+            return base64.b64decode(body["content"]).decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    return None
+
+
 def _fetch_github_pr(url: str) -> dict:
     """
-    Fetch a GitHub PR by URL and extract the diff.
+    Fetch a GitHub PR by URL and extract a reviewable diff plus the full
+    post-change source of every changed file.
 
     Accepts URLs like:
     - https://github.com/owner/repo/pull/123
     - https://api.github.com/repos/owner/repo/pulls/123
 
-    Returns: {"diff": "...", "title": "...", "description": "...", "file": "..."}
+    Returns: {"diff": "...", "title": "...", "description": "...",
+              "files": [...], "post_files": {path: source}, ...}
     """
     # Parse GitHub PR URL
     match = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
@@ -76,15 +98,7 @@ def _fetch_github_pr(url: str) -> dict:
         resp.raise_for_status()
         pr_data = resp.json()
 
-        # Fetch the actual diff (unified diff format)
-        diff_resp = requests.get(
-            f"{api_url}/files",
-            headers={**headers, "Accept": "application/vnd.github.v3.raw"},
-            timeout=10
-        )
-        diff_resp.raise_for_status()
-
-        # Parse files from the PR to get one of the changed files
+        # Fetch the per-file patches
         files_resp = requests.get(
             f"{api_url}/files",
             headers=headers,
@@ -94,14 +108,33 @@ def _fetch_github_pr(url: str) -> dict:
         files_resp.raise_for_status()
         files_data = files_resp.json()
 
-        # Get the patch (GitHub includes a unified diff in the patch field)
-        diff_text = ""
-        changed_files = []
-        for f in files_data:
-            if f.get("patch"):
-                diff_text += f["patch"] + "\n"
-            changed_files.append(f["filename"])
+        head_sha = (pr_data.get("head") or {}).get("sha")
 
+        # GitHub's per-file "patch" field is just the hunk body — it does NOT
+        # include the "--- a/file" / "+++ b/file" headers a unified diff needs.
+        # Concatenating raw patches without reconstructing those headers
+        # produces an unparseable diff, so rebuild them here.
+        diff_parts = []
+        changed_files = []
+        post_files: dict[str, str] = {}
+        for f in files_data:
+            filename = f["filename"]
+            status = f.get("status")
+            changed_files.append(filename)
+
+            patch = f.get("patch")
+            if patch:
+                old_name = f.get("previous_filename", filename)
+                old_path = "/dev/null" if status == "added" else f"a/{old_name}"
+                new_path = "/dev/null" if status == "removed" else f"b/{filename}"
+                diff_parts.append(f"--- {old_path}\n+++ {new_path}\n{patch}\n")
+
+            if status != "removed" and head_sha:
+                content = _fetch_file_at_ref(owner, repo, filename, head_sha, headers)
+                if content is not None:
+                    post_files[filename] = content
+
+        diff_text = "".join(diff_parts)
         if not diff_text:
             raise ValueError("No diff found in this PR (may be empty or binary files only)")
 
@@ -110,6 +143,7 @@ def _fetch_github_pr(url: str) -> dict:
             "title": pr_data.get("title", f"PR #{pr_num}"),
             "description": pr_data.get("body", ""),
             "files": changed_files,
+            "post_files": post_files,
             "url": url,
             "base_ref": (pr_data.get("base") or {}).get("ref"),
             "head_ref": (pr_data.get("head") or {}).get("ref"),
@@ -414,19 +448,19 @@ def index():
 def api_review():
     data = request.get_json(force=True) or {}
     engine_name = data.get("engine", "static")
-    skip_context = False
     branch = None
 
     # Determine if this is a GitHub PR or a direct diff
     if "github_url" in data:
-        # Fetch the PR from GitHub
+        # Fetch the PR from GitHub: the real diff plus every changed file's
+        # full post-change source (needed for the static engine and for
+        # AST context retrieval, not just the LLM prompt).
         try:
             pr_data = _fetch_github_pr(data["github_url"])
             diff = pr_data["diff"]
-            file = pr_data["files"][0] if pr_data["files"] else "pr_file.py"
+            post_files = pr_data.get("post_files") or {}
             title = pr_data["title"]
             description = pr_data["description"]
-            skip_context = True  # GitHub diffs bypass parsing
             branch = {"base": pr_data.get("base_ref"), "head": pr_data.get("head_ref")}
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -436,15 +470,16 @@ def api_review():
         if not diff.strip():
             return jsonify({"error": "No diff provided."}), 400
         file = data.get("file") or "input.py"
+        post_files = {file: data.get("source", "")}
         title = data.get("title", "")
         description = ""
 
     try:
         engine = (StaticAnalysisEngine() if engine_name == "static"
                   else LLMEngine(get_provider(engine_name)))
-        pr = PullRequest(diff=diff, post_files={file: data.get("source", "")},
+        pr = PullRequest(diff=diff, post_files=post_files,
                          title=title, description=description)
-        review = Reviewer(engine, use_context=(not skip_context),
+        review = Reviewer(engine, use_context=True,
                           verify=bool(data.get("verify"))).review(pr)
         issues = [{
             "file": i.file, "line_start": i.line_start, "line_end": i.line_end,
@@ -453,9 +488,15 @@ def api_review():
             "suggested_fix": i.suggested_fix, "is_question": i.is_question,
             "source": i.source, "verified": i.verified,
         } for i in review.sorted_issues()]
+        has_source = any(v.strip() for v in post_files.values())
+        try:
+            parse_diff(diff)
+            diff_parses = True
+        except Exception:
+            diff_parses = False
         grounding = {
-            "file_mapping": bool((data.get("source") or "").strip()),
-            "repo_style": not skip_context,
+            "file_mapping": has_source,
+            "repo_style": has_source and diff_parses,
         }
         return jsonify({"summary": review.summary, "issues": issues,
                         "grounding": grounding, "branch": branch})

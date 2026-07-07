@@ -70,10 +70,24 @@ class Reviewer:
             verified.extend(run_linter(src, path))
         if pr.tests:
             verified.extend(run_tests(pr.post_files, pr.tests))
-        # de-dup verified vs model findings on (line, source)
-        seen = {(i.line_start, i.source) for i in review.issues}
+
+        # De-dup on (file, line, explanation) rather than (line, source): the
+        # static engine and run_linter both run pyflakes independently and can
+        # report the identical message with different `source` values, which
+        # would otherwise show up as two cards for one real bug. A verified
+        # finding is strictly better than an inferred one, so it replaces
+        # (rather than just skips next to) any matching model-sourced finding.
+        def key(i):
+            return (i.file, i.line_start, i.explanation)
+
+        kept = list(review.issues)
+        seen = {key(i) for i in kept}
         for v in verified:
-            if (v.line_start, v.source) not in seen:
-                review.issues.append(v)
-                seen.add((v.line_start, v.source))
+            k = key(v)
+            if k in seen:
+                kept = [i for i in kept if key(i) != k]
+            kept.append(v)
+            seen.add(k)
+
+        review.issues = kept
         return Review(summary=review.summary, issues=review.sorted_issues())

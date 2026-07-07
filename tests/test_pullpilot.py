@@ -308,3 +308,66 @@ def test_web_endpoints():
     assert client.get("/dashboard").status_code == 200
     # empty diff -> error
     assert client.post("/api/review", json={"diff": ""}).status_code == 400
+
+
+def test_verification_dedupes_model_and_linter_duplicate():
+    # The static engine's own pyflakes pass and the separate linter-verification
+    # pass can report the identical undefined-name finding under different
+    # `source` values; the reviewer must collapse them into one, keeping the
+    # verified (linter) one rather than showing both.
+    diff = "--- a/y.py\n+++ b/y.py\n@@ -1,2 +1,2 @@\n-def g():\n+def g():\n+    return undefined_var\n"
+    source = "def g():\n    return undefined_var\n"
+    pr = PullRequest(diff=diff, post_files={"y.py": source}, title="", description="")
+    review = Reviewer(StaticAnalysisEngine(), use_context=True, verify=True).review(pr)
+    matches = [i for i in review.issues if "undefined name 'undefined_var'" in i.explanation]
+    assert len(matches) == 1
+    assert matches[0].source == "linter" and matches[0].verified
+
+
+def test_fetch_github_pr_reconstructs_diff_headers_and_fetches_files(monkeypatch):
+    import base64
+    from pullpilot import web
+
+    src_a = "def f(a=[]):\n    return a\n"
+    src_b = "y = 1\n"
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers=None, timeout=None, params=None):
+        if url.endswith("/pulls/42"):
+            return FakeResp({
+                "title": "Fix mutable default",
+                "body": "desc",
+                "base": {"ref": "main"},
+                "head": {"ref": "fix-branch", "sha": "deadbeef"},
+            })
+        if url.endswith("/pulls/42/files"):
+            return FakeResp([
+                {"filename": "a.py", "status": "modified",
+                 "patch": "@@ -1,2 +1,2 @@\n-def f(a=None):\n+def f(a=[]):\n     return a"},
+                {"filename": "b.py", "status": "added", "patch": "@@ -0,0 +1 @@\n+y = 1"},
+            ])
+        if "/contents/a.py" in url:
+            return FakeResp({"encoding": "base64",
+                              "content": base64.b64encode(src_a.encode()).decode()})
+        if "/contents/b.py" in url:
+            return FakeResp({"encoding": "base64",
+                              "content": base64.b64encode(src_b.encode()).decode()})
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(web.requests, "get", fake_get)
+    result = web._fetch_github_pr("https://github.com/acme/widget/pull/42")
+
+    assert result["base_ref"] == "main" and result["head_ref"] == "fix-branch"
+    assert result["post_files"] == {"a.py": src_a, "b.py": src_b}
+    # must be a valid unified diff (real per-file headers reconstructed)
+    parsed = parse_diff(result["diff"])
+    assert {fc.path for fc in parsed.files} == {"a.py", "b.py"}
