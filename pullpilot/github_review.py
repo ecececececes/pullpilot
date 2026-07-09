@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -25,7 +26,7 @@ from .diff_parser import parse_diff
 from .engines import LLMEngine, StaticAnalysisEngine
 from .providers import get_provider
 from .reviewer import PullRequest, Reviewer
-from .schema import Review, Severity
+from .schema import Issue, Review, Severity
 
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
@@ -93,7 +94,9 @@ def post_comment(owner: str, repo: str, number: int, body: str) -> dict:
         method="POST", data=payload))
 
 
-def build_pr(owner: str, repo: str, number: int) -> PullRequest:
+def build_pr(owner: str, repo: str, number: int) -> Tuple[PullRequest, str]:
+    """Returns the PullRequest plus the head commit sha (needed to anchor
+    inline review comments)."""
     pull = get_pull(owner, repo, number)
     head_sha = pull["head"]["sha"]
     diff = get_pull_diff(owner, repo, number)
@@ -104,7 +107,87 @@ def build_pr(owner: str, repo: str, number: int) -> PullRequest:
         except Exception:
             pass  # deleted/binary/unfetchable file -> review the diff alone
     return PullRequest(diff=diff, post_files=post_files,
-                       title=pull.get("title", ""), description=pull.get("body") or "")
+                       title=pull.get("title", ""), description=pull.get("body") or ""), head_sha
+
+
+# operators or a leading Python keyword mark a fix as replacement code
+_CODE_HINT = re.compile(
+    r"[=()\[\]:+\-*/%<>]"
+    r"|^\s*(return|if|for|while|def|class|import|from|raise|yield|assert|with)\b")
+
+
+def _suggestion_block(issue: Issue) -> str:
+    """Render suggested_fix as a GitHub ```suggestion block when it looks like
+    replacement code (one-click applicable); prose fixes render as plain text.
+    Only valid inside line-anchored review comments."""
+    fix = (issue.suggested_fix or "").rstrip()
+    if not fix.strip():
+        return ""
+    lines = fix.splitlines()
+    if any(l.startswith(("+", "-")) for l in lines):
+        code = [l[1:] for l in lines if l.startswith("+")]
+        if code:
+            return "\n```suggestion\n" + "\n".join(code) + "\n```"
+        return f"\n_Suggested fix:_ {fix.strip()}"
+    stripped = fix.strip()
+    if "\n" not in stripped and not stripped.endswith(".") and _CODE_HINT.search(stripped):
+        # keep original indentation: the block replaces the whole line
+        return "\n```suggestion\n" + fix.lstrip("\n") + "\n```"
+    return f"\n_Suggested fix:_ {stripped}"
+
+
+def _finding_header(issue: Issue) -> str:
+    badge = "✅ verified" if issue.verified else "💭 inferred"
+    return (f"{_SEV_MARK.get(issue.severity, issue.severity.value)} · "
+            f"_{issue.type.value}_ · {badge} · conf {issue.confidence:.0%}")
+
+
+def _inline_comment_body(issue: Issue) -> str:
+    q = "❓ " if issue.is_question else ""
+    return f"**{_finding_header(issue)}**\n\n{q}{issue.explanation}{_suggestion_block(issue)}"
+
+
+def build_inline_review(review: Review, diff: str, head_sha: str) -> dict:
+    """Build a Reviews-API payload: findings on lines GitHub can anchor to
+    (lines present in the diff) become inline comments with suggestion blocks;
+    the rest fold into the review body so nothing is dropped."""
+    changed = {fc.path: set(fc.affected_lines) for fc in parse_diff(diff).files}
+    comments, leftover = [], []
+    for i in review.sorted_issues():
+        if i.line_end in changed.get(i.file, set()):
+            c = {"path": i.file, "line": i.line_end, "side": "RIGHT",
+                 "body": _inline_comment_body(i)}
+            if i.line_start < i.line_end and i.line_start in changed[i.file]:
+                c["start_line"] = i.line_start
+                c["start_side"] = "RIGHT"
+            comments.append(c)
+        else:
+            leftover.append(i)
+
+    body = ["## 🤖 PullPilot review", "", review.summary or "_(no summary)_", ""]
+    if comments:
+        body.append(f"**{len(comments)} finding(s)** commented inline.")
+    if leftover:
+        body.append(f"**{len(leftover)} finding(s)** outside the diff's comment range:")
+        body.append("")
+        for i in leftover:
+            q = "❓ " if i.is_question else ""
+            body.append(f"- {_finding_header(i)} · `{i.file}:{i.line_start}-{i.line_end}`")
+            body.append(f"  {q}{i.explanation}")
+            if i.suggested_fix:
+                body.append(f"  - _suggested fix:_ {i.suggested_fix}")
+    if not review.issues:
+        body.append("✅ No issues found in the changed lines.")
+    body += ["", "---", "_PullPilot is an automated assistant; final review "
+             "judgement rests with a human._"]
+    return {"commit_id": head_sha, "event": "COMMENT",
+            "body": "\n".join(body), "comments": comments}
+
+
+def post_review(owner: str, repo: str, number: int, payload: dict) -> dict:
+    return json.loads(_request(
+        f"{_API}/repos/{owner}/{repo}/pulls/{number}/reviews",
+        method="POST", data=json.dumps(payload).encode()))
 
 
 def format_review_markdown(review: Review) -> str:
@@ -158,18 +241,26 @@ def main() -> None:
     args = ap.parse_args()
 
     owner, repo, number = _resolve_target(args)
-    pr = build_pr(owner, repo, number)
+    pr, head_sha = build_pr(owner, repo, number)
 
     engine = (StaticAnalysisEngine() if args.provider == "static"
               else LLMEngine(get_provider(args.provider)))
     review = Reviewer(engine, use_context=True, verify=args.verify).review(pr)
-    body = format_review_markdown(review)
 
     if args.post:
-        post_comment(owner, repo, number, body)
-        print(f"posted review to {owner}/{repo}#{number} ({len(review.issues)} findings)")
+        payload = build_inline_review(review, pr.diff, head_sha)
+        try:
+            post_review(owner, repo, number, payload)
+            print(f"posted inline review to {owner}/{repo}#{number} "
+                  f"({len(payload['comments'])} inline, {len(review.issues)} total findings)")
+        except urllib.error.HTTPError as e:
+            # Reviews API can 422 (e.g. stale sha, unanchorable line);
+            # degrade to the single-comment format rather than lose the review.
+            print(f"inline review failed ({e.code}), falling back to a comment")
+            post_comment(owner, repo, number, format_review_markdown(review))
+            print(f"posted review to {owner}/{repo}#{number} ({len(review.issues)} findings)")
     else:
-        print(body)
+        print(format_review_markdown(review))
 
 
 if __name__ == "__main__":

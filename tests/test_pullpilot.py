@@ -1,4 +1,5 @@
 """End-to-end and unit tests. Run with: pytest -q"""
+import json
 import os
 import sys
 
@@ -158,6 +159,27 @@ def test_every_review_gets_a_summary():
     assert "no issues" in review.summary
 
 
+def test_extract_json_recovers_review_from_noisy_output():
+    from pullpilot.engines import extract_json
+    review = {"summary": "s", "issues": []}
+    schema_echo = ('{"$defs": {"Issue": {"properties": {"file": {"type": "string"}}}},'
+                   ' "properties": {"summary": {}}, "title": "Review", "type": "object"}')
+    # plain
+    assert extract_json(json.dumps(review)) == review
+    # fenced
+    assert extract_json("```json\n" + json.dumps(review) + "\n```") == review
+    # schema echoed before the real answer (small local models do this)
+    assert extract_json(schema_echo + "\n" + json.dumps(review)) == review
+    # trailing prose after the object
+    assert extract_json(json.dumps(review) + "\nHope this helps!") == review
+    # schema only, no real answer -> error, not a silently-empty review
+    try:
+        extract_json(schema_echo)
+        assert False, "should have raised"
+    except ValueError:
+        pass
+
+
 def test_github_loader_builds_pr_offline(monkeypatch):
     """Prove the real-data shaping without hitting the network."""
     from pullpilot.benchmark import github_loader as gl
@@ -276,10 +298,51 @@ def test_build_pr_from_pull_offline(monkeypatch):
         "head": {"sha": "deadbeef"}, "title": "tweak f", "body": "desc"})
     monkeypatch.setattr(gr, "get_pull_diff", lambda o, r, n: diff)
     monkeypatch.setattr(gr, "fetch_file", lambda o, r, sha, p: "def f(x):\n    return y\n")
-    pr = gr.build_pr("acme", "widget", 7)
+    pr, head_sha = gr.build_pr("acme", "widget", 7)
     assert pr.title == "tweak f"
+    assert head_sha == "deadbeef"
     assert "m.py" in pr.post_files and "return y" in pr.post_files["m.py"]
     assert "@@" in pr.diff
+
+
+def test_build_inline_review_anchors_and_suggests():
+    from pullpilot.github_review import build_inline_review
+    diff = ("--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n"
+            " def f(x):\n-    return x + 1\n+    return x - 1\n")
+    rev = Review(summary="One bug.", issues=[
+        # line 2 is in the diff -> inline comment with a suggestion block
+        Issue(file="m.py", line_start=2, line_end=2, type=IssueType.LOGIC,
+              severity=Severity.MAJOR, confidence=0.9, explanation="sign flipped",
+              suggested_fix="    return x + 1"),
+        # line 40 is nowhere in the diff -> folds into the review body
+        Issue(file="m.py", line_start=40, line_end=40, type=IssueType.STYLE,
+              severity=Severity.MINOR, confidence=0.7, explanation="rename me"),
+    ])
+    payload = build_inline_review(rev, diff, "sha123")
+    assert payload["commit_id"] == "sha123" and payload["event"] == "COMMENT"
+    assert len(payload["comments"]) == 1
+    c = payload["comments"][0]
+    assert c["path"] == "m.py" and c["line"] == 2 and c["side"] == "RIGHT"
+    assert "```suggestion\n    return x + 1\n```" in c["body"]
+    assert "sign flipped" in c["body"]
+    # ungrounded finding is kept in the body, not dropped
+    assert "rename me" in payload["body"]
+    assert "One bug." in payload["body"]
+
+
+def test_suggestion_block_formats():
+    from pullpilot.github_review import _suggestion_block
+    code = Issue(file="a.py", line_start=1, line_end=1, type=IssueType.BUG,
+                 severity=Severity.MAJOR, confidence=0.9, explanation="e",
+                 suggested_fix="x = y or 0")
+    assert "```suggestion\nx = y or 0\n```" in _suggestion_block(code)
+    diffstyle = code.model_copy(update={"suggested_fix": "-x = y\n+x = y or 0"})
+    assert "```suggestion\nx = y or 0\n```" in _suggestion_block(diffstyle)
+    prose = code.model_copy(update={"suggested_fix": "Consider guarding against None."})
+    out = _suggestion_block(prose)
+    assert "```suggestion" not in out and "Consider guarding" in out
+    none = code.model_copy(update={"suggested_fix": None})
+    assert _suggestion_block(none) == ""
 
 
 def test_free_provider_presets_exist():
@@ -318,8 +381,79 @@ def test_discover_bugfix_commits_offline(monkeypatch):
     assert ("ccc", "pkg/core.py") in pairs
 
 
-def test_web_endpoints():
-    from pullpilot import web
+def test_get_provider_accepts_pasted_key_and_model(monkeypatch):
+    from pullpilot.providers import get_provider
+
+    # pasted key beats the environment and reaches the SDK client
+    monkeypatch.setenv("GEMINI_API_KEY", "env-key")
+    p = get_provider("gemini", api_key="pasted-key", model="gemini-2.5-pro")
+    assert p._client.api_key == "pasted-key"
+    assert p._model == "gemini-2.5-pro"
+
+    # without a pasted key the env var still works, model falls to preset default
+    p = get_provider("gemini")
+    assert p._client.api_key == "env-key"
+    assert p._model == "gemini-2.5-flash"
+
+    # openai direct provider takes a pasted key too (no env needed)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = get_provider("openai", api_key="sk-test", model="gpt-4o-mini")
+    assert p._client.api_key == "sk-test" and p._model == "gpt-4o-mini"
+
+    # missing key -> helpful error
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    try:
+        get_provider("groq")
+        assert False, "should have raised"
+    except RuntimeError as e:
+        assert "GROQ_API_KEY" in str(e)
+
+
+def test_history_roundtrip(tmp_path):
+    from pullpilot import history
+    db = str(tmp_path / "reviews.db")
+    payload = {"summary": "s", "issues": [{"file": "x.py"}], "branch": None}
+    rid = history.save_review("github.com/a/b/pull/1", "static", payload, path=db)
+    items = history.list_reviews(path=db)
+    assert len(items) == 1
+    assert items[0]["id"] == rid and items[0]["engine"] == "static"
+    assert items[0]["n_issues"] == 1 and items[0]["summary"] == "s"
+    assert history.get_review(rid, path=db) == payload
+    assert history.get_review(999, path=db) is None
+
+
+def test_web_review_stream_and_history(monkeypatch, tmp_path):
+    from pullpilot import history, web
+    monkeypatch.setattr(history, "DB_PATH", str(tmp_path / "reviews.db"))
+    client = web.app.test_client()
+    payload = {
+        "diff": "--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n-def f(a=None):\n+def f(a=[]):\n     return a\n",
+        "source": "def f(a=[]):\n    return a\n",
+        "file": "x.py", "engine": "static", "stream": True,
+    }
+    r = client.post("/api/review", json=payload)
+    assert r.status_code == 200
+    lines = [json.loads(l) for l in r.data.decode().splitlines() if l.strip()]
+    assert any("stage" in l for l in lines)          # progress events emitted
+    final = lines[-1]
+    assert final["issues"] and final["summary"]
+
+    # the review was persisted and is retrievable
+    items = client.get("/api/history").get_json()
+    assert len(items) == 1 and items[0]["target"] == "pasted diff (x.py)"
+    full = client.get(f"/api/history/{items[0]['id']}").get_json()
+    assert full["summary"] == final["summary"]
+    assert client.get("/api/history/999").status_code == 404
+
+    # streamed errors arrive as an NDJSON line, not an HTTP error
+    r = client.post("/api/review", json={"diff": "", "stream": True})
+    lines = [json.loads(l) for l in r.data.decode().splitlines() if l.strip()]
+    assert any("error" in l for l in lines)
+
+
+def test_web_endpoints(monkeypatch, tmp_path):
+    from pullpilot import history, web
+    monkeypatch.setattr(history, "DB_PATH", str(tmp_path / "reviews.db"))
     client = web.app.test_client()
     # index renders and includes the engine dropdown + examples
     r = client.get("/")

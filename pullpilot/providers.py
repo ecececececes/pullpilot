@@ -60,11 +60,15 @@ class MockProvider(Provider):
 class AnthropicProvider(Provider):
     name = "anthropic"
 
-    def __init__(self, model: str = "claude-sonnet-4-6", max_tokens: int = 2000):
+    def __init__(self, model: str = "claude-sonnet-4-6", max_tokens: int = 2000,
+                 api_key: Optional[str] = None):
         import anthropic  # lazy
 
-        self._client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
-                                            max_retries=8)
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "Provide an API key or set the ANTHROPIC_API_KEY environment variable.")
+        self._client = anthropic.Anthropic(api_key=key, max_retries=8)
         self._model = model
         self._max_tokens = max_tokens
 
@@ -86,13 +90,13 @@ class OpenAIProvider(Provider):
 
     def __init__(self, model: str = "gpt-4o", max_tokens: int = 2000,
                  base_url: Optional[str] = None, api_key_env: str = "OPENAI_API_KEY",
-                 name: Optional[str] = None):
+                 name: Optional[str] = None, api_key: Optional[str] = None):
         from openai import OpenAI  # lazy
 
-        key = os.environ.get(api_key_env)
+        key = api_key or os.environ.get(api_key_env)
         if not key and "ollama" not in (base_url or ""):
             raise RuntimeError(
-                f"Set the {api_key_env} environment variable for this provider.")
+                f"Provide an API key or set the {api_key_env} environment variable.")
         self._client = OpenAI(api_key=key or "ollama", base_url=base_url,
                               max_retries=8, timeout=60.0)
         self._model = model
@@ -165,11 +169,13 @@ PRESETS = {
 }
 
 
-def _make_preset(name: str) -> Provider:
-    base_url, model, key_env = PRESETS[name]
+def _make_preset(name: str, api_key: Optional[str] = None,
+                 model: Optional[str] = None) -> Provider:
+    base_url, default_model, key_env = PRESETS[name]
     base_url = os.environ.get(f"{name.upper()}_BASE_URL", base_url)
-    model = os.environ.get(f"{name.upper()}_MODEL", model)
-    return OpenAIProvider(model=model, base_url=base_url, api_key_env=key_env, name=name)
+    model = model or os.environ.get(f"{name.upper()}_MODEL", default_model)
+    return OpenAIProvider(model=model, base_url=base_url, api_key_env=key_env,
+                          name=name, api_key=api_key)
 
 
 _REGISTRY = {
@@ -180,11 +186,18 @@ _REGISTRY = {
 }
 
 
-def get_provider(name: str, **kwargs) -> Provider:
+def get_provider(name: str, api_key: Optional[str] = None,
+                 model: Optional[str] = None, **kwargs) -> Provider:
+    """api_key/model override the environment (e.g. pasted into the web UI);
+    they are only forwarded to providers that accept them."""
     if name in PRESETS:
-        return _make_preset(name)
+        return _make_preset(name, api_key=api_key, model=model)
     if name not in _REGISTRY:
         raise ValueError(
             f"unknown provider '{name}', choose from "
             f"{list(_REGISTRY) + list(PRESETS)}")
+    if api_key and name in ("anthropic", "openai"):
+        kwargs.setdefault("api_key", api_key)
+    if model and name in ("anthropic", "openai", "selfhosted"):
+        kwargs.setdefault("model", model)
     return _REGISTRY[name](**kwargs)

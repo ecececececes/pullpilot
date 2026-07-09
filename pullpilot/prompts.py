@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-from .schema import Review
-
 SYSTEM_PROMPT = """You are PullPilot, a precise code-review assistant.
 You review a single pull-request diff and report only issues you can ground in
 specific changed lines.
@@ -29,8 +27,12 @@ Principles (PRECISION OVER RECALL):
 Issue types: likely_bug, logic_error, style_violation, missing_tests, security_smell
 Severities: critical, major, minor, informational
 
-Respond with ONLY a JSON object matching this schema (no markdown, no prose):
+Respond with ONLY a JSON object in exactly this shape — it is a template, fill
+in your own values, do NOT echo it back (no markdown, no prose, no schema):
 {schema}
+
+"type" must be one of the issue types above; "severity" one of the severities;
+"confidence" a number between 0 and 1; "suggested_fix" replacement code or null.
 """
 
 USER_TEMPLATE = """PR title: {title}
@@ -45,8 +47,26 @@ PR description: {description}
 Review the diff. Respond with the JSON object only."""
 
 
+# A compact fill-in template instead of Review.model_json_schema(): small
+# models parrot a raw JSON-Schema dump back (breaking parsing), and the full
+# schema wastes tokens without improving adherence.
+_RESPONSE_TEMPLATE = {
+    "summary": "1-3 plain-language sentences: what the PR changes and your overall assessment",
+    "issues": [{
+        "file": "path/to/file.py",
+        "line_start": 3,
+        "line_end": 4,
+        "type": "likely_bug",
+        "severity": "major",
+        "confidence": 0.9,
+        "explanation": "what is wrong and why",
+        "suggested_fix": "replacement code, or null",
+    }],
+}
+
+
 def system_prompt() -> str:
-    return SYSTEM_PROMPT.format(schema=json.dumps(Review.model_json_schema()))
+    return SYSTEM_PROMPT.format(schema=json.dumps(_RESPONSE_TEMPLATE, indent=1))
 
 
 def user_prompt(title: str, description: str, diff: str, context: str) -> str:

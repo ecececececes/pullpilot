@@ -17,8 +17,9 @@ import os
 import re
 
 import requests
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, Response, jsonify, render_template_string, request, stream_with_context
 
+from . import history
 from .diff_parser import parse_diff
 from .engines import LLMEngine, StaticAnalysisEngine
 from .providers import PRESETS, get_provider
@@ -240,6 +241,14 @@ main.results{max-width:1100px;margin:1.3rem auto 3rem;padding:0 1.4rem;display:g
 .conf-bar{height:5px;background:var(--line);border-radius:999px;overflow:hidden;margin-top:.3rem}
 .conf-fill{height:100%;background:var(--accent);border-radius:999px}
 .card-verified{font-size:.72rem;color:var(--good)}
+
+.history-wrap{max-width:1100px;margin:0 auto 3rem;padding:0 1.4rem}
+.history-list{display:flex;flex-direction:column;gap:.4rem}
+.hist-row{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;font-size:.82rem;padding:.5rem .75rem;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);cursor:pointer}
+.hist-row:hover{border-color:var(--accent)}
+.hist-time{font-family:var(--mono);font-size:.72rem;color:var(--mut-2);white-space:nowrap}
+.hist-target{font-family:var(--mono);color:var(--ink);word-break:break-all}
+.hist-count{margin-left:auto;color:var(--mut);white-space:nowrap}
 </style></head><body>
 <header>
   <span class="logo">Pull<b>Pilot</b></span>
@@ -282,9 +291,17 @@ main.results{max-width:1100px;margin:1.3rem auto 3rem;padding:0 1.4rem;display:g
         <label for="engine">Engine</label>
         <select id="engine">__ENGINE_OPTIONS__</select>
       </div>
+      <div id="keyField" style="flex:1;min-width:220px">
+        <label for="api_key">API key (optional)</label>
+        <input type="password" id="api_key" placeholder="paste key — else uses env var" autocomplete="off">
+      </div>
+      <div id="modelField" style="min-width:180px">
+        <label for="model">Model (optional)</label>
+        <input type="text" id="model" placeholder="engine default">
+      </div>
       <div class="check"><input type="checkbox" id="verify"><label for="verify" style="margin:0">Run linter check</label></div>
     </div>
-    <p class="hint">Static needs no key. Free engines (gemini, groq, github, openrouter) read their key from the matching environment variable in the terminal you launched this from. Paste a link to any public GitHub PR to fetch and review it directly.</p>
+    <p class="hint">Static needs no key. For LLM engines, paste an API key above (used only for this request, never stored) or export the matching environment variable before launching. The model field overrides the engine's default (e.g. gpt-4o-mini, gemini-2.5-pro). Paste a link to any public GitHub PR to fetch and review it directly.</p>
   </section>
 </div>
 
@@ -307,6 +324,13 @@ main.results{max-width:1100px;margin:1.3rem auto 3rem;padding:0 1.4rem;display:g
   </section>
 </main>
 
+<div class="history-wrap">
+  <section class="panel">
+    <h2>Recent Reviews</h2>
+    <div id="history" class="history-list"><div class="empty">No reviews yet.</div></div>
+  </section>
+</div>
+
 <script>
 // Tabs
 document.querySelectorAll('.tab').forEach(tab => {
@@ -327,6 +351,15 @@ sel.onchange=()=>{const e=EXAMPLES.find(x=>x.id===sel.value);if(!e)return;
 
 const out=document.getElementById('out'), go=document.getElementById('go');
 const summaryEl=document.getElementById('summaryText');
+
+// key/model only make sense for LLM engines
+const engineSel=document.getElementById('engine');
+function syncKeyFields(){
+  const llm=engineSel.value!=='static';
+  document.getElementById('keyField').style.display=llm?'':'none';
+  document.getElementById('modelField').style.display=llm?'':'none';
+}
+engineSel.onchange=syncKeyFields; syncKeyFields();
 
 function setGrounding(g){
   const fm=document.getElementById('gcFile'), rs=document.getElementById('gcStyle');
@@ -371,12 +404,45 @@ function renderIssue(i){
     +'</div>';
 }
 
+function renderResult(d){
+  summaryEl.textContent = d.summary || '(no summary)';
+  setGrounding(d.grounding);
+  setBranch(d.branch);
+  if(!d.issues.length){out.innerHTML='<div class="empty">No issues found in the changed lines.</div>';}
+  else{out.innerHTML=d.issues.map(renderIssue).join('');}
+}
+
+async function loadHistory(){
+  try{
+    const r=await fetch('/api/history');
+    const items=await r.json();
+    const el=document.getElementById('history');
+    if(!items.length){el.innerHTML='<div class="empty">No reviews yet.</div>';return;}
+    el.innerHTML=items.map(h=>'<div class="hist-row" data-id="'+h.id+'">'
+      +'<span class="hist-time">'+escapeHtml((h.created_at||'').replace('T',' ').replace('+00:00',''))+'</span>'
+      +'<span class="hist-target">'+escapeHtml(h.target)+'</span>'
+      +'<span class="pill type">'+escapeHtml(h.engine)+'</span>'
+      +'<span class="hist-count">'+h.n_issues+' finding(s)</span></div>').join('');
+    el.querySelectorAll('.hist-row').forEach(row=>{row.onclick=async()=>{
+      const r=await fetch('/api/history/'+row.dataset.id);
+      const d=await r.json();
+      if(!d.error){renderResult(d);window.scrollTo({top:0,behavior:'smooth'});}
+    };});
+  }catch(e){}
+}
+loadHistory();
+
 go.onclick=async()=>{
   const activeTab = document.querySelector('.tab.active').dataset.tab;
   let body = {
     engine: document.getElementById('engine').value,
-    verify: document.getElementById('verify').checked
+    verify: document.getElementById('verify').checked,
+    stream: true
   };
+  const apiKey = document.getElementById('api_key').value.trim();
+  const model = document.getElementById('model').value.trim();
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
 
   if (activeTab === 'github') {
     const url = document.getElementById('github_url').value.trim();
@@ -397,17 +463,27 @@ go.onclick=async()=>{
   }
 
   go.disabled=true;
-  out.innerHTML='<div class="empty">Reviewing… (LLM engines can take a moment)</div>';
-  summaryEl.textContent='Running analysis…';
+  out.innerHTML='<div class="empty">Starting review…</div>';
+  summaryEl.textContent='Starting review…';
+  const handleLine=(line)=>{
+    if(!line.trim())return;
+    const m=JSON.parse(line);
+    if(m.stage){summaryEl.textContent=m.stage;out.innerHTML='<div class="empty">'+escapeHtml(m.stage)+'</div>';}
+    else if(m.error){out.innerHTML='<div class="err">'+escapeHtml(m.error)+'</div>';summaryEl.textContent='';}
+    else{renderResult(m);loadHistory();}
+  };
   try{
     const r=await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await r.json();
-    if(d.error){out.innerHTML='<div class="err">'+d.error+'</div>';summaryEl.textContent='';go.disabled=false;return;}
-    summaryEl.textContent = d.summary || '(no summary)';
-    setGrounding(d.grounding);
-    setBranch(d.branch);
-    if(!d.issues.length){out.innerHTML='<div class="empty">No issues found in the changed lines.</div>';}
-    else{out.innerHTML=d.issues.map(renderIssue).join('');}
+    const reader=r.body.getReader(), dec=new TextDecoder();
+    let buf='';
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let i;
+      while((i=buf.indexOf('\\n'))>=0){handleLine(buf.slice(0,i));buf=buf.slice(i+1);}
+    }
+    if(buf.trim())handleLine(buf);
   }catch(e){out.innerHTML='<div class="err">Request failed: '+e+'</div>';}
   go.disabled=false;
 };
@@ -444,64 +520,119 @@ def index():
     return render_template_string(html)
 
 
-@app.route("/api/review", methods=["POST"])
-def api_review():
-    data = request.get_json(force=True) or {}
-    engine_name = data.get("engine", "static")
-    branch = None
-
-    # Determine if this is a GitHub PR or a direct diff
+def _prepare_inputs(data: dict) -> dict:
+    """Turn the request body (GitHub PR link or pasted diff) into review
+    inputs. Raises ValueError on bad input."""
     if "github_url" in data:
         # Fetch the PR from GitHub: the real diff plus every changed file's
         # full post-change source (needed for the static engine and for
         # AST context retrieval, not just the LLM prompt).
+        pr_data = _fetch_github_pr(data["github_url"])
+        return {
+            "diff": pr_data["diff"],
+            "post_files": pr_data.get("post_files") or {},
+            "title": pr_data["title"],
+            "description": pr_data["description"],
+            "branch": {"base": pr_data.get("base_ref"),
+                       "head": pr_data.get("head_ref")},
+            "target": data["github_url"],
+        }
+    diff = data.get("diff", "")
+    if not diff.strip():
+        raise ValueError("No diff provided.")
+    file = data.get("file") or "input.py"
+    return {"diff": diff, "post_files": {file: data.get("source", "")},
+            "title": data.get("title", ""), "description": "",
+            "branch": None, "target": f"pasted diff ({file})"}
+
+
+def _execute_review(inp: dict, engine_name: str, verify: bool,
+                    api_key: str | None, model: str | None) -> dict:
+    """Run the review pipeline, persist it to history, and shape the response."""
+    engine = (StaticAnalysisEngine() if engine_name == "static"
+              else LLMEngine(get_provider(engine_name, api_key=api_key,
+                                          model=model)))
+    pr = PullRequest(diff=inp["diff"], post_files=inp["post_files"],
+                     title=inp["title"], description=inp["description"])
+    review = Reviewer(engine, use_context=True, verify=verify).review(pr)
+    issues = [{
+        "file": i.file, "line_start": i.line_start, "line_end": i.line_end,
+        "type": i.type.value, "severity": i.severity.value,
+        "confidence": i.confidence, "explanation": i.explanation,
+        "suggested_fix": i.suggested_fix, "is_question": i.is_question,
+        "source": i.source, "verified": i.verified,
+    } for i in review.sorted_issues()]
+    has_source = any(v.strip() for v in inp["post_files"].values())
+    try:
+        parse_diff(inp["diff"])
+        diff_parses = True
+    except Exception:
+        diff_parses = False
+    result = {
+        "summary": review.summary, "issues": issues,
+        "grounding": {"file_mapping": has_source,
+                      "repo_style": has_source and diff_parses},
+        "branch": inp["branch"],
+    }
+    try:
+        history.save_review(inp["target"], engine_name, result)
+    except Exception:
+        pass  # history is best-effort; never fail the review over it
+    return result
+
+
+@app.route("/api/review", methods=["POST"])
+def api_review():
+    data = request.get_json(force=True) or {}
+    engine_name = data.get("engine", "static")
+    verify = bool(data.get("verify"))
+    # Pasted key/model override the environment for this request only —
+    # they are never stored or logged.
+    api_key = (data.get("api_key") or "").strip() or None
+    model = (data.get("model") or "").strip() or None
+
+    if not data.get("stream"):
         try:
-            pr_data = _fetch_github_pr(data["github_url"])
-            diff = pr_data["diff"]
-            post_files = pr_data.get("post_files") or {}
-            title = pr_data["title"]
-            description = pr_data["description"]
-            branch = {"base": pr_data.get("base_ref"), "head": pr_data.get("head_ref")}
+            inp = _prepare_inputs(data)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-    else:
-        # Direct diff from textarea
-        diff = data.get("diff", "")
-        if not diff.strip():
-            return jsonify({"error": "No diff provided."}), 400
-        file = data.get("file") or "input.py"
-        post_files = {file: data.get("source", "")}
-        title = data.get("title", "")
-        description = ""
-
-    try:
-        engine = (StaticAnalysisEngine() if engine_name == "static"
-                  else LLMEngine(get_provider(engine_name)))
-        pr = PullRequest(diff=diff, post_files=post_files,
-                         title=title, description=description)
-        review = Reviewer(engine, use_context=True,
-                          verify=bool(data.get("verify"))).review(pr)
-        issues = [{
-            "file": i.file, "line_start": i.line_start, "line_end": i.line_end,
-            "type": i.type.value, "severity": i.severity.value,
-            "confidence": i.confidence, "explanation": i.explanation,
-            "suggested_fix": i.suggested_fix, "is_question": i.is_question,
-            "source": i.source, "verified": i.verified,
-        } for i in review.sorted_issues()]
-        has_source = any(v.strip() for v in post_files.values())
         try:
-            parse_diff(diff)
-            diff_parses = True
-        except Exception:
-            diff_parses = False
-        grounding = {
-            "file_mapping": has_source,
-            "repo_style": has_source and diff_parses,
-        }
-        return jsonify({"summary": review.summary, "issues": issues,
-                        "grounding": grounding, "branch": branch})
-    except Exception as exc:
-        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 400
+            return jsonify(_execute_review(inp, engine_name, verify, api_key, model))
+        except Exception as exc:
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 400
+
+    # Streaming mode (the UI): NDJSON, stage lines then the final result,
+    # so the user sees which slow step (GitHub fetch, model call) is running.
+    def gen():
+        try:
+            if "github_url" in data:
+                yield json.dumps({"stage": "Fetching PR from GitHub…"}) + "\n"
+            inp = _prepare_inputs(data)
+            stage = f"Reviewing with {engine_name}…"
+            if engine_name != "static":
+                stage = f"Querying {model or engine_name} (can take ~10-30s)…"
+            yield json.dumps({"stage": stage}) + "\n"
+            yield json.dumps(_execute_review(inp, engine_name, verify,
+                                             api_key, model)) + "\n"
+        except Exception as exc:
+            yield json.dumps({"error": f"{type(exc).__name__}: {exc}"}) + "\n"
+    return Response(stream_with_context(gen()),
+                    mimetype="application/x-ndjson",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/history")
+def api_history():
+    return jsonify(history.list_reviews())
+
+
+@app.route("/api/history/<int:review_id>")
+def api_history_item(review_id: int):
+    payload = history.get_review(review_id)
+    if payload is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(payload)
 
 
 @app.route("/dashboard")

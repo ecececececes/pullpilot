@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # required to post the review comment
+  pull-requests: write   # required to post the review
 
 jobs:
   review:
@@ -20,7 +20,15 @@ jobs:
       - name: Run PullPilot
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: python -m pullpilot.github_review --provider anthropic --post
+        # first provider with a key wins; static needs none, so the review
+        # posts (inline comments + suggestions) even with no secrets configured
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then provider=anthropic
+          elif [ -n "$GEMINI_API_KEY" ]; then provider=gemini
+          else provider=static; fi
+          echo "engine: $provider"
+          python -m pullpilot.github_review --provider "$provider" --post --verify

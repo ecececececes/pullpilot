@@ -17,6 +17,7 @@ __pycache__/
 # Project
 data/examples/results.json
 data/examples/benchmark_*.html
+data/reviews.db
 *.log
 
 # OS

@@ -1,12 +1,15 @@
 name: PullPilot Review
-description: Automated code review with LLM + context grounding
+description: >
+  Automated code review with LLM + context grounding. Pass provider API keys
+  and GITHUB_TOKEN via `env` on the step that uses this action — composite
+  actions cannot read the caller's secrets context themselves.
 inputs:
   provider:
-    description: LLM provider (anthropic, groq, openai, etc)
+    description: LLM provider (anthropic, gemini, groq, openai, static, ...)
     required: false
     default: anthropic
   verify:
-    description: Run linter + tests
+    description: Run linter + tests ("true"/"false")
     required: false
     default: 'false'
 runs:
@@ -18,10 +21,8 @@ runs:
         python-version: '3.12'
     - run: pip install -r requirements.txt
       shell: bash
-    - run: python -m pullpilot.github_review --provider ${{ inputs.provider }} --post ${{ inputs.verify && '--verify' || '' }}
+    - run: python -m pullpilot.github_review --provider ${{ inputs.provider }} --post ${{ inputs.verify == 'true' && '--verify' || '' }}
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}

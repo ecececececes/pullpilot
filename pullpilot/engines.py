@@ -29,16 +29,42 @@ class PullRequestData:
 
 
 def extract_json(text: str) -> dict:
+    """Pull the review object out of model output. Models wrap JSON in fences,
+    echo the schema/template before their answer, or append prose — so scan
+    every balanced object and prefer the one shaped like a review."""
     text = text.strip()
     if text.startswith("```"):
         parts = text.split("```")
         text = parts[1] if len(parts) > 1 else text
         if text.lstrip().startswith("json"):
             text = text.lstrip()[4:]
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+
+    decoder = json.JSONDecoder()
+    candidates = []
+    i = text.find("{")
+    while i != -1:
+        try:
+            obj, consumed = decoder.raw_decode(text[i:])
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            candidates.append(obj)
+        i = text.find("{", i + consumed)
+    if not candidates:
         raise ValueError(f"no JSON object in model output: {text[:200]!r}")
-    return json.loads(text[start:end + 1])
+
+    def is_review(o: dict) -> bool:
+        # an echoed schema/template has $defs/properties; a real answer has
+        # an issues list (possibly empty) and no schema keys
+        return (isinstance(o.get("issues"), list)
+                and "$defs" not in o and "properties" not in o)
+
+    for obj in candidates:
+        if is_review(obj):
+            return obj
+    raise ValueError(
+        f"model output contained JSON but no review object: {text[:200]!r}")
 
 
 class ReviewEngine(ABC):
