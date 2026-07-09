@@ -22,6 +22,9 @@ Principles (PRECISION OVER RECALL):
 - Every issue MUST reference a real line range within the changed lines.
 - Use the retrieved context to avoid inventing issues and to catch problems that
   depend on surrounding code.
+- ALWAYS fill "summary" with 1-3 plain-language sentences: what the PR changes
+  and your overall assessment. Never leave it empty, even when there are no
+  issues.
 
 Issue types: likely_bug, logic_error, style_violation, missing_tests, security_smell
 Severities: critical, major, minor, informational

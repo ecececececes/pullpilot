@@ -127,6 +127,37 @@ def test_end_to_end_dataset_runs():
     assert len(review.issues) >= 1
 
 
+def test_every_review_gets_a_summary():
+    # engine returns a blank summary -> the reviewer synthesizes one
+    class SilentEngine(StaticAnalysisEngine):
+        def review(self, pr, changed_by_file, context):
+            return Review(issues=super().review(pr, changed_by_file, context).issues)
+
+    src = "def f(a=[]):\n    return a\n"
+    diff = ("--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n"
+            "-def f(a=None):\n+def f(a=[]):\n     return a\n")
+    pr = PullRequest(diff=diff, post_files={"x.py": src})
+    review = Reviewer(SilentEngine()).review(pr)
+    assert review.summary.strip()
+    assert "x.py" in review.summary
+    assert "issue(s)" in review.summary
+
+    # engine-provided summaries are kept untouched
+    class OpinionatedEngine(StaticAnalysisEngine):
+        def review(self, pr, changed_by_file, context):
+            return Review(summary="LGTM overall.", issues=[])
+
+    review = Reviewer(OpinionatedEngine()).review(pr)
+    assert review.summary == "LGTM overall."
+
+    # a clean PR still gets a summary saying so
+    clean_pr = PullRequest(
+        diff="--- a/y.py\n+++ b/y.py\n@@ -1,2 +1,2 @@\n-def g(a):\n+def g(a):  # doc\n     return a\n",
+        post_files={"y.py": "def g(a):  # doc\n    return a\n"})
+    review = Reviewer(StaticAnalysisEngine()).review(clean_pr)
+    assert "no issues" in review.summary
+
+
 def test_github_loader_builds_pr_offline(monkeypatch):
     """Prove the real-data shaping without hitting the network."""
     from pullpilot.benchmark import github_loader as gl

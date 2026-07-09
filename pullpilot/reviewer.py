@@ -14,9 +14,34 @@ from .context_retriever import (
     NoContextRetriever,
     PythonASTRetriever,
 )
-from .diff_parser import parse_diff
+from .diff_parser import ParsedDiff, parse_diff
 from .engines import PullRequestData, ReviewEngine
-from .schema import Review
+from .schema import _SEVERITY_RANK, Review
+
+
+def fallback_summary(parsed: ParsedDiff, review: Review) -> str:
+    """Plain-language summary built from the diff and findings, used whenever
+    an engine returns a blank one so every review ships with a summary."""
+    files = [fc.path for fc in parsed.files]
+    if files:
+        shown = ", ".join(files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
+        n_added = sum(len(fc.added_lines) for fc in parsed.files)
+        n_removed = sum(len(fc.removed_lines) for fc in parsed.files)
+        change = (f"This PR touches {len(files)} file(s) ({shown}), "
+                  f"adding {n_added} line(s) and removing {n_removed}.")
+    else:
+        change = "This PR's diff could not be parsed into per-file changes."
+
+    if not review.issues:
+        return f"{change} The review found no issues in the changed lines."
+    by_sev = sorted(
+        {i.severity for i in review.issues}, key=lambda s: _SEVERITY_RANK[s])
+    parts = ", ".join(
+        f"{sum(1 for i in review.issues if i.severity == s)} {s.value}" for s in by_sev)
+    n_verified = sum(1 for i in review.issues if i.verified)
+    verified = f", {n_verified} machine-verified" if n_verified else ""
+    return (f"{change} The review found {len(review.issues)} issue(s) "
+            f"({parts}){verified}.")
 
 
 @dataclass
@@ -61,6 +86,8 @@ class Reviewer:
 
         if self.verify:
             review = self._add_verified_findings(pr, review)
+        if not review.summary.strip():
+            review.summary = fallback_summary(parsed, review)
         return review
 
     def _add_verified_findings(self, pr: PullRequest, review: Review) -> Review:

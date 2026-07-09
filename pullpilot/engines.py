@@ -74,8 +74,5 @@ class StaticAnalysisEngine(ReviewEngine):
         issues = []
         for path, src in pr.post_files.items():
             issues.extend(analyze(src, changed_by_file.get(path, set()), path))
-        summary = (
-            f"Static analysis of {', '.join(pr.post_files) or 'the diff'}: "
-            f"{len(issues)} issue(s) found in changed lines."
-        )
-        return Review(summary=summary, issues=issues)
+        # summary left blank: the Reviewer fills in the shared diff-aware one
+        return Review(issues=issues)
