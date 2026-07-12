@@ -28,7 +28,7 @@ from .providers import get_provider
 from .reviewer import PullRequest, Reviewer
 from .schema import Issue, Review, Severity
 
-_API = "https://api.github.com"
+_API = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 _RAW = "https://raw.githubusercontent.com"
 _RETRIES = 3
 

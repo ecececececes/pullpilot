@@ -80,6 +80,33 @@ Defaults can be overridden if a model name goes stale, e.g.
 Note: free tiers may use your prompts for training — fine for this open-source
 benchmark, but keep private data off them.
 
+## Self-hosting (privacy: your code never leaves your infrastructure)
+
+Everything in PullPilot can run on hardware you control — nothing is sent to
+a third party unless you pick a cloud engine:
+
+- **`static` engine** — pure AST + pyflakes, no network at all.
+- **`selfhosted` / `ollama` engines** — LLM reviews against your own Ollama.
+  `selfhosted` defaults to `http://localhost:11434/api/generate`; point
+  `SELFHOSTED_BASE_URL` (and `SELFHOSTED_MODEL`) at any Ollama endpoint on
+  your network to share one GPU box across the team.
+- **Review history** stays in a local SQLite file (`data/reviews.db`).
+- **GitHub Enterprise** — set `GITHUB_API_URL=https://ghe.example.com/api/v3`
+  and PR fetching (web UI, `github_review`, `github_loader`) stays on your
+  network; PR links on your GHE host are accepted too. github.com keeps
+  working as before when the variable is unset.
+
+One-command deploy with Docker:
+
+```bash
+docker compose up --build                  # web UI :5000, offline static engine
+docker compose --profile llm up --build    # + bundled Ollama (local LLM reviews)
+docker compose exec ollama ollama pull llama3.2:3b   # once, to fetch a model
+```
+
+Then open http://localhost:5000 and pick the `selfhosted` engine. No API key,
+no external calls, prompts never leave the machine.
+
 ## LLM engine + the context ablation (needs a key)
 
 ```bash

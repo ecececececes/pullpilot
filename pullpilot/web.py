@@ -33,6 +33,10 @@ _RESULTS = os.path.join(_ROOT, "data", "examples", "results.json")
 
 _ENGINE_CHOICES = ["static"] + sorted(PRESETS) + ["selfhosted","openai", "anthropic"]
 
+# Point at a GitHub Enterprise Server instance (e.g. https://ghe.corp/api/v3)
+# to keep PR fetches on your own network.
+_GH_API = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+
 
 def _load_examples():
     try:
@@ -54,7 +58,7 @@ def _fetch_file_at_ref(owner: str, repo: str, path: str, ref: str, headers: dict
     degrade gracefully instead of failing the whole review."""
     try:
         resp = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+            f"{_GH_API}/repos/{owner}/{repo}/contents/{path}",
             headers=headers, params={"ref": ref}, timeout=10,
         )
         resp.raise_for_status()
@@ -80,13 +84,17 @@ def _fetch_github_pr(url: str) -> dict:
     """
     # Parse GitHub PR URL
     match = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+    if not match and _GH_API != "https://api.github.com":
+        # A custom GITHUB_API_URL is set (self-hosted GitHub Enterprise):
+        # also accept PR links on that host.
+        match = re.search(r"([^/\s]+)/([^/\s]+)/pull/(\d+)", url)
     if not match:
         raise ValueError(
             "Invalid GitHub PR URL. Expected: https://github.com/owner/repo/pull/123"
         )
 
     owner, repo, pr_num = match.groups()
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_num}"
+    api_url = f"{_GH_API}/repos/{owner}/{repo}/pulls/{pr_num}"
 
     # Use GitHub token if available (for higher rate limits)
     headers = {}

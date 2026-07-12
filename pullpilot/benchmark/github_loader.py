@@ -29,7 +29,7 @@ from typing import List, Optional, Tuple
 
 from .build_dataset import BenchmarkPR, make_buggy_pr, save_dataset
 
-_API = "https://api.github.com"
+_API = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 _RAW = "https://raw.githubusercontent.com"
 _RETRIES = 4
 

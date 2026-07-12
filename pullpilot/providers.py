@@ -116,24 +116,28 @@ class OpenAIProvider(Provider):
         return resp.choices[0].message.content or ""
     
 class SelfHostedProvider(Provider):
-    """Provider for a self-hosted Ollama instance exposed over HTTP."""
+    """Provider for a self-hosted Ollama instance exposed over HTTP.
+
+    Defaults to a local Ollama (http://localhost:11434) so nothing ever
+    leaves the machine; point SELFHOSTED_BASE_URL at any Ollama-compatible
+    /api/generate endpoint on your own infrastructure to share one instance."""
 
     name = "selfhosted"
 
     def __init__(
         self,
-        model: str = "llama3.2:3b",
+        model: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: float = 120.0,
     ):
-        self._model = model
+        self._model = model or os.environ.get("SELFHOSTED_MODEL", "llama3.2:3b")
         self._timeout = timeout
 
         self._base_url = (
             base_url
             or os.environ.get(
                 "SELFHOSTED_BASE_URL",
-                "https://sabbath-crazily-gigantic.ngrok-free.dev/api/generate",
+                "http://localhost:11434/api/generate",
             )
         )
 

@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+data/reviews.db
+tests/
+REPORT.md
