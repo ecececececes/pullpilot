@@ -150,11 +150,18 @@ class SelfHostedProvider(Provider):
             "stream": False,
         }
 
-        response = requests.post(
-            self._base_url,
-            json=payload,
-            timeout=self._timeout,
-        )
+        try:
+            response = requests.post(
+                self._base_url,
+                json=payload,
+                timeout=self._timeout,
+            )
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError(
+                f"Could not reach the self-hosted Ollama endpoint at "
+                f"{self._base_url}. Make sure Ollama is running there, or set "
+                f"SELFHOSTED_BASE_URL to a reachable /api/generate URL."
+            ) from e
 
         response.raise_for_status()
 

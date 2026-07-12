@@ -726,6 +726,8 @@ def main():
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", 5000))
     print(f"PullPilot UI → http://0.0.0.0:{port}  (Ctrl+C to stop)")
+    print(f"selfhosted engine → "
+          f"{os.environ.get('SELFHOSTED_BASE_URL', '(unset, using http://localhost:11434/api/generate)')}")
     app.run(host=host, port=port, debug=False)
 
 if __name__ == "__main__":
